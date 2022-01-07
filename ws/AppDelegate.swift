@@ -9,17 +9,16 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
   
   func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    #if DEBUG
+    Bundle(path: "/Applications/InjectionIII.app/Contents/Resources/iOSInjection.bundle")?.load()
+    #endif
+    
     window = UIWindow(frame: UIScreen.main.bounds)
     window?.makeKeyAndVisible()
     window?.rootViewController = rootController
     
-    let url = URL(string: "ws://localhost:4000/ws")!
-    let transport = URLSessionWebSocketTransport(url: url)
-    let socket = Socket(transport: transport)
-    socket.connect()
-    
-    let vc = ViewController(socket: socket)
-    rootController.setViewControllers([vc], animated: false)
+    Dev.shared = Dev(navController: rootController)
+    Dev.shared.run()
     
     return true
   }

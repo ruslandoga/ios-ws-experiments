@@ -44,6 +44,21 @@ extension ReplyError: Decodable {
   }
 }
 
+fileprivate struct Request<T: Encodable> {
+  let ref: UInt
+  let event: String
+  let payload: T
+}
+
+extension Request: Encodable {
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.unkeyedContainer()
+    try container.encode(ref)
+    try container.encode(event)
+    try container.encode(payload)
+  }
+}
+
 // TODO buffer (to persist pushes when conn is not open),
 // TODO reconnect timer (probably goes into the transport)
 // TODO push timeout (socket.push(..., timeout: 5) { (result: ...) in result = .failure(TimeoutError)})
@@ -70,15 +85,23 @@ final class Socket {
     transport.onOpen = { [weak self] in self?.state = .open }
     // once connection closed, if state is not disconnected, create reconnection timer? or do it in the transport?
     transport.onClose = { [weak self] in self?.state = .closed }
-    transport.onData = { [weak self] in self?.receive($0) }
+    transport.onData = { [weak self] data in self?.receive(data) }
     // TODO transport.onError = { [weak self] }
   }
   
   // TODO convinience init(url: URL)
   
+  deinit {
+    disconnect()
+  }
+  
   func connect() {
     guard state == .closed else { return }
     transport.connect()
+  }
+  
+  func disconnect() {
+    transport.disconnect()
   }
 
   func on<T: Decodable>(_ event: String, callback: @escaping (T) -> ()) {
@@ -115,12 +138,16 @@ final class Socket {
     
     // if not connected, add to buffer
     // if connected, send
-    let data = try encoder.encode(payload)
+    let data = try encoder.encode(Request(ref: ref, event: event, payload: payload))
     transport.send(data)
   }
   
   private func receive(_ data: Data) {
-    _ = try? decoder.decode(Packet.self, from: data)
+    do {
+      _ = try decoder.decode(Packet.self, from: data)
+    } catch {
+      print("receive error", error)
+    }
   }
 }
 
@@ -148,6 +175,10 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   // TODO headers with auth
   init(url: URL) {
     self.url = url
+  }
+  
+  deinit {
+    task?.cancel()
   }
   
   // reset reconnection attempts

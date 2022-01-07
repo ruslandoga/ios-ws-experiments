@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1002EDAD278895EE003FC55A /* Dev.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1002EDAC278895EE003FC55A /* Dev.swift */; };
+		1002EDAF27889615003FC55A /* DevVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1002EDAE27889615003FC55A /* DevVC.swift */; };
 		100998132784AD7700078301 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100998122784AD7700078301 /* AppDelegate.swift */; };
 		100998172784AD7700078301 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100998162784AD7700078301 /* ViewController.swift */; };
 		1009981C2784AD7800078301 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1009981B2784AD7800078301 /* Assets.xcassets */; };
@@ -15,6 +17,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		1002EDAC278895EE003FC55A /* Dev.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dev.swift; sourceTree = "<group>"; };
+		1002EDAE27889615003FC55A /* DevVC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevVC.swift; sourceTree = "<group>"; };
 		1009980F2784AD7700078301 /* ws.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ws.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		100998122784AD7700078301 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		100998162784AD7700078301 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
@@ -57,6 +61,8 @@
 				100998122784AD7700078301 /* AppDelegate.swift */,
 				100998162784AD7700078301 /* ViewController.swift */,
 				100998262784AD8900078301 /* Socket.swift */,
+				1002EDAC278895EE003FC55A /* Dev.swift */,
+				1002EDAE27889615003FC55A /* DevVC.swift */,
 				1009981B2784AD7800078301 /* Assets.xcassets */,
 				1009981D2784AD7800078301 /* LaunchScreen.storyboard */,
 				100998202784AD7800078301 /* Info.plist */,
@@ -135,8 +141,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				100998272784AD8900078301 /* Socket.swift in Sources */,
+				1002EDAF27889615003FC55A /* DevVC.swift in Sources */,
 				100998172784AD7700078301 /* ViewController.swift in Sources */,
 				100998132784AD7700078301 /* AppDelegate.swift in Sources */,
+				1002EDAD278895EE003FC55A /* Dev.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
