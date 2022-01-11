@@ -1,4 +1,7 @@
 import UIKit
+import os
+
+let logger = Logger()
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {

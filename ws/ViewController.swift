@@ -16,9 +16,9 @@ struct LikeResponse: Decodable {
   let matched: Bool
 }
 
-struct CallResponse: Decodable {
-  let id: UUID
-}
+//struct CallResponse: Decodable {
+//  let id: UUID
+//}
 
 struct Empty: Decodable {}
 
@@ -42,7 +42,7 @@ final class ViewController: UIViewController {
   
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
-    try? socket.push("hang-up", payload: ["call": "123"]) { (result: Result<Empty, Error>) in }
+    socket.push("hang-up", payload: ["call": "123"]) { (result: Result<Empty, PushError>) in }
   }
   
   override func viewDidLoad() {
@@ -58,7 +58,7 @@ final class ViewController: UIViewController {
     }
     
     // TODO buffer
-    try? socket.push("like", payload: ["id": "123"]) { (result: Result<LikeResponse, Error>) in
+    socket.push("like", payload: ["id": "123"]) { (result: Result<LikeResponse, PushError>) in
       guard case let .success(like) = result else { return }
 
       DispatchQueue.main.async {
@@ -69,11 +69,11 @@ final class ViewController: UIViewController {
     // TODO backoff reconnect
     // socket.connect()
     
-    try? socket.push("call", payload: ["id": "123"]) { [weak self] (result: Result<CallResponse, Error>) in
-      guard let self = self else { return }
-      guard case let .success(call) = result else { return }
-      DispatchQueue.main.async { self.runCall(id: call.id) }
-    }
+//    try? socket.push("call", payload: ["id": "123"]) { [weak self] (result: Result<CallResponse, PushError>) in
+//      guard let self = self else { return }
+//      guard case let .success(call) = result else { return }
+//      DispatchQueue.main.async { self.runCall(id: call.id) }
+//    }
   }
   
   func runCall(id: UUID) {
