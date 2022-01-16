@@ -20,53 +20,50 @@ enum SocketConnectionState {
 }
 
 final class Socket {
-  fileprivate static let queue = DispatchQueue(label: "fun.copycat.socket")
-  
   private var ref: UInt = 0
   private let decoder = JSONDecoder()
   private let encoder = JSONEncoder()
   private let pushInfo = PushInfo()
   private let transport: SocketTransport
+  private let queue: DispatchQueue
   private var buffer = [UInt: Data]()
-  
-  var onError: (Error) -> ()
   
   var connection: SocketConnectionState {
     transport.connectionState
   }
   
-  init(transport: SocketTransport, onError: @escaping (Error) -> ()) {
-    self.onError = onError
+  init(transport: SocketTransport, queue: DispatchQueue) {
+    self.queue = queue
     
     decoder.userInfo[.init(rawValue: "push")!] = pushInfo
     decoder.dateDecodingStrategy = .iso8601
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     
     self.transport = transport
+    // callbacks run on queue (URLSession.delegateQueue.underlyingQueue = queue)
     transport.onOpen = { [weak self] in self?.emptyBuffer() }
     transport.onData = { [weak self] data in self?.receive(data) }
-    transport.onError = onError
     transport.connect()
   }
   
-  convenience init(url: URL, onError: @escaping (Error) -> ()) {
-    self.init(url: url, headers: [:], onError: onError)
+  convenience init(url: URL, queue: DispatchQueue) {
+    self.init(url: url, headers: [:], queue: queue)
   }
   
-  convenience init(url: URL, token: String, onError: @escaping (Error) -> ()) {
-    self.init(url: url, headers: ["authorization": "Bearer \(token)"], onError: onError)
+  convenience init(url: URL, token: String, queue: DispatchQueue) {
+    self.init(url: url, headers: ["authorization": "Bearer \(token)"], queue: queue)
   }
   
-  convenience init(url: URL, headers: [String: String], onError: @escaping (Error) -> ()) {
+  convenience init(url: URL, headers: [String: String], queue: DispatchQueue) {
     var req = URLRequest(url: url)
     headers.forEach { header in req.addValue(header.value, forHTTPHeaderField: header.key) }
     
     let delegateQueue = OperationQueue()
-    delegateQueue.underlyingQueue = Socket.queue
+    delegateQueue.underlyingQueue = queue
     let session = URLSession(configuration: .default, delegate: nil, delegateQueue: delegateQueue)
-    let transport = URLSessionWebSocketTransport(req: req, session: session)
+    let transport = URLSessionWebSocketTransport(req: req, session: session, queue: queue)
     
-    self.init(transport: transport, onError: onError)
+    self.init(transport: transport, queue: queue)
   }
   
   deinit {
@@ -74,46 +71,43 @@ final class Socket {
   }
   
   func on<T: Decodable>(_ event: String, callback: @escaping (T) -> ()) {
-    pushInfo.subscriptions[event] = { container in
-      let payload = try container.decode(T.self)
-      callback(payload)
+    queue.async {
+      self.pushInfo.subscriptions[event] = { container in
+        let payload = try container.decode(T.self)
+        callback(payload)
+      }
     }
   }
   
   func off(_ event: String) {
-    pushInfo.subscriptions[event] = nil
+    queue.async {
+      self.pushInfo.subscriptions[event] = nil
+    }
   }
   
   func push<E: Encodable, T: Decodable>(_ event: String, payload: E, timeout: TimeInterval? = 5, callback: @escaping (Result<T, PushError>) -> ()) {
-    Socket.queue.sync {
+    queue.async {
       self.ref &+= 1
-      let ref = ref
+      let ref = self.ref
       
-      var timeoutTimer: Timer?
+      var timeoutWorkItem: DispatchWorkItem?
       
       if let timeout = timeout {
-        let timer = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
+        let item = DispatchWorkItem { [weak self] in
           guard let self = self else { return }
-          
-          Socket.queue.sync {
-            guard self.pushInfo.replies.removeValue(forKey: ref) != nil else {
-              // `reply` has been executed already, no need to timeout
-              return
-            }
-            
-            self.buffer[ref] = nil
-            callback(.failure(.timeout))
-          }
+          self.pushInfo.replies[ref] = nil
+          self.buffer[ref] = nil
+          callback(.failure(.timeout))
         }
         
-        RunLoop.current.add(timer, forMode: .common)
-        timeoutTimer = timer
+        self.queue.asyncAfter(deadline: .now() + timeout, execute: item)
+        timeoutWorkItem = item
       }
       
-      // `reply` closure is already executed on Socket.queue (URLSession.operationQueue.underlyingQueue = Socket.queue)
-      pushInfo.replies[ref] = { container in
+      // `reply` closure is already executed on queue (URLSession.delegateQueue.underlyingQueue = queue)
+      self.pushInfo.replies[ref] = { container in
+        timeoutWorkItem?.cancel()
         let status = try container.decode(ReplyStatus.self)
-        timeoutTimer?.invalidate()
         
         switch status {
         case .ok:
@@ -131,18 +125,19 @@ final class Socket {
       let request = Request(ref: ref, event: event, payload: payload)
       
       do {
-        let data = try encoder.encode(request)
-        sendElseBuffer(data, for: ref)
+        let data = try self.encoder.encode(request)
+
+        // try send, buffer in case of error
+        self.transport.send(data) { [weak self] error in
+          if error != nil {
+            // TODO if timeoutWorkItem has run, don't store data to buffer
+            // can use operation queue for this
+            self?.buffer[ref] = data
+          }
+        }
       } catch {
-        onError(error)
-      }
-    }
-  }
-  
-  private func sendElseBuffer(_ data: Data, for ref: UInt) {
-    transport.send(data) { [weak self] error in
-      if error != nil {
-        self?.buffer[ref] = data
+        // TODO
+        print("encoding error", error)
       }
     }
   }
@@ -161,7 +156,8 @@ final class Socket {
     do {
       _ = try decoder.decode(Packet.self, from: data)
     } catch {
-      onError(error)
+      // TODO
+      print("decoding error", error)
     }
   }
 }
@@ -247,16 +243,18 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   
   private(set) var connectionState: SocketConnectionState = .closed
   private var reconnectDelay = initialReconnectDelay
-  private var reconnectTimer: Timer?
-  private var pingTimer: Timer?
+  private var reconnectItem: DispatchWorkItem?
+  private var pingItem: DispatchWorkItem?
   
   private let req: URLRequest
   private let session: URLSession
+  private let queue: DispatchQueue
   private var task: URLSessionWebSocketTask?
   
-  init(req: URLRequest, session: URLSession) {
+  init(req: URLRequest, session: URLSession, queue: DispatchQueue) {
     self.req = req
     self.session = session
+    self.queue = queue
     super.init()
   }
   
@@ -265,14 +263,17 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   }
   
   func connect() {
-    guard task == nil else { return }
-  
-    if let reconnectTimer = reconnectTimer {
-      reconnectTimer.invalidate()
-      reconnectDelay = initialReconnectDelay
-    }
+    queue.async { [weak self] in
+      guard let self = self else { return }
+      guard self.task == nil else { return }
     
-    reconnect()
+      if let reconnectItem = self.reconnectItem {
+        reconnectItem.cancel()
+        self.reconnectDelay = initialReconnectDelay
+      }
+      
+      self.reconnect()
+    }
   }
   
   private func reconnect() {
@@ -288,13 +289,16 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   }
   
   func disconnect() {
-    logger.debug("[websocket] disconnecting ...")
-    
-    reconnectTimer?.invalidate()
-    pingTimer?.invalidate()
-    
-    task?.cancel(with: .normalClosure, reason: nil)
-    task = nil
+    queue.async { [weak self] in
+      guard let self = self else { return }
+      logger.debug("[websocket] disconnecting ...")
+      
+      self.reconnectItem?.cancel()
+      self.pingItem?.cancel()
+      
+      self.task?.cancel(with: .normalClosure, reason: nil)
+      self.task = nil
+    }
   }
   
   func send(_ data: Data, callback: @escaping (Error?) -> Void) {
@@ -319,34 +323,37 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
       }
     }
   }
-}
-
-extension URLSessionWebSocketTransport: URLSessionWebSocketDelegate {
-  func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-    print(#function)
-    reconnectTimer?.invalidate()
-    reconnectDelay = initialReconnectDelay
-    
-    // schedules pings
-    let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+  
+  private func scheduleNextPing() {
+    let item = DispatchWorkItem { [weak self] in
       print("sending ping")
       self?.task?.sendPing { error in
         if let error = error {
           self?.onError?(error)
         }
+        
+        self?.scheduleNextPing()
       }
     }
     
-    RunLoop.current.add(timer, forMode: .common)
-    pingTimer = timer
+    queue.asyncAfter(deadline: .now() + 45, execute: item)
+    pingItem = item
+  }
+}
+
+extension URLSessionWebSocketTransport: URLSessionWebSocketDelegate {
+  func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+    reconnectItem?.cancel()
+    reconnectDelay = initialReconnectDelay
+    
+    scheduleNextPing()
     
     connectionState = .open
     onOpen?()
   }
   
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    print(#function, error)
-    pingTimer?.invalidate()
+    pingItem?.cancel()
     
     connectionState = .closed
     onClose?()
@@ -355,15 +362,14 @@ extension URLSessionWebSocketTransport: URLSessionWebSocketDelegate {
     
     reconnectDelay *= 2
     reconnectDelay = min(5, reconnectDelay)
-    let reconnectIn = reconnectDelay
 
     // schedules next reconnect
-    let timer = Timer(timeInterval: reconnectIn, repeats: false) { [weak self] _ in
+    let item = DispatchWorkItem { [weak self] in
       print("reconnecting")
       self?.reconnect()
     }
     
-    RunLoop.current.add(timer, forMode: .common)
-    reconnectTimer = timer
+    queue.asyncAfter(deadline: .now() + reconnectDelay, execute: item)
+    reconnectItem = item
   }
 }

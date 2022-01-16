@@ -1,31 +1,117 @@
 #if DEBUG
 import UIKit
 import os
+//
+//struct Event: Codable {
+//  let id: String
+//  let name: String
+//}
+//
+//struct Event2: Codable {
+//  let id: Int
+//}
+//
+//struct CallRequest: Encodable {
+//  let id: String
+//}
+//
+//struct Profile: Decodable {
+//  let name: String
+//}
+//
+//struct CallResponse: Decodable {
+//  let id: String
+//  let iceServers: [URL]
+//  let profile: Profile
+//  let date: Date?
+//  let point: CGPoint?
+//}
 
-struct Event: Codable {
-  let id: String
-  let name: String
-}
-
-struct Event2: Codable {
-  let id: Int
-}
-
-struct CallRequest: Encodable {
-  let id: String
-}
-
-struct Profile: Decodable {
-  let name: String
-}
-
-struct CallResponse: Decodable {
-  let id: String
-  let iceServers: [URL]
-  let profile: Profile
-  let date: Date?
-  let point: CGPoint?
-}
+//let req = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: timeout)
+//URLSession.shared.dataTask(with: req) { <#Data?#>, <#URLResponse?#>, <#Error?#> in
+//  <#code#>
+//}
+ 
+//fileCache.get(voicemail.url, for: voicemail.key) { [weak self] result in
+//  switch result {
+//  case let .success(data): self?.play(audio: data)
+//  case let .failure(error): print("error", error)
+//  }
+//}
+//
+//final class FileCache {
+//  private let lockQueue = DispatchQueue(label: "filecache.lock.queue")
+//  private var callbacks = [String: [(Result<Data, Swift.Error>) -> Void]]()
+//  private let root: URL
+//
+//  enum Error: Swift.Error {
+//    case network
+//  }
+//  // TODO timeout
+//  func get(_ url: URL, for key: String, callback: @escaping (Result<Data, Swift.Error>) -> Void) {
+//    let keyURL = root.appendingPathComponent(key)
+//
+//    lockQueue.async { [weak self] in
+//      guard let self = self else { return }
+//
+//      // data already cached
+//      if let data = FileManager.default.contents(atPath: keyURL.path) {
+//        callback(.success(data))
+//      } else {
+//        if var callbacks = self.callbacks[key] {
+//          callbacks.append(callback)
+//          return
+//        }
+//
+//        self.callbacks[key] = [callback]
+//
+//        // or just use URLCache
+//        let task = URLSession.shared.dataTask(with: url) { data, resp, error in
+//          self.lockQueue.async { [weak self] in
+//            guard let self = self else { return }
+//            guard let callbacks = self.callbacks.removeValue(forKey: key) else { return }
+//
+//            if let error = error {
+//              callbacks.forEach { $0(.failure(error)) }
+//              return
+//            }
+//
+//            guard let resp = resp as? HTTPURLResponse else {
+//              callbacks.forEach { $0(.failure(Error.network)) }
+//              return
+//            }
+//
+//            guard resp.statusCode == 200 else {
+//              callbacks.forEach { $0(.failure(Error.network)) }
+//              return
+//            }
+//
+//            guard let data = data else {
+//              callbacks.forEach { $0(.failure(Error.network)) }
+//              return
+//            }
+//
+//            callbacks.forEach { $0(.success(data)) }
+//
+//            do {
+//              try data.write(to: keyURL) // TODO .atomic
+//            } catch {
+//              // TODO
+//              print("error wtiring \(data) to \(keyURL) for url=\(url) and key=\(key)", error)
+//            }
+//          }
+//        }
+//
+//        // can also return progress
+//        task.resume()
+//      }
+//    }
+//  }
+//
+//  init(root: URL) {
+//    self.root = root
+//  }
+//}
 
 class DevVC: UIViewController {
   var socket: Socket!
@@ -44,69 +130,30 @@ class DevVC: UIViewController {
     run()
   }
   
-  // TODO https://stackoverflow.com/questions/60110667/urlsessionwebsockettask-fatal-error-only-one-of-message-or-error-should-be-nil
+  // I need to learn more about timers, how to schedule them from background using runloop, when it can fail etc
+  // I need to learn more about dispatch queues, self capture etc
+  // check that github gist about gcd
+  // learn about thread sanitizer https://twitter.com/twannl/status/1192781427978493952?s=20
+  // watch that wwdc session on gcd
+  // check out firebase crashlytics
+  // https://developer.apple.com/videos/play/wwdc2018/414/
+  // https://developer.apple.com/videos/play/wwdc2021/10203
+  // https://developer.apple.com/videos/play/wwdc2020/10078
+  // https://developer.apple.com/videos/play/wwdc2018/412
+  // https://developer.apple.com/videos/play/wwdc2018/416
+  // https://developer.apple.com/videos/play/wwdc2018/401
+  // https://developer.apple.com/videos/play/wwdc2017/406
   private func run() {
-    print("\n\n🏁🏁🏁 START")
-    let url = URL(string: "ws://localhost:4000/ws")!
-    // TODO handle failed auth:
-    // socket = Socket(url: url)
-    // socket.onError = { [weak self] error in if let error = error as AuthError { self?.logout() } }
-    // or socket.onClose = { [weak self] code in if code == 403 { self?.logout() } }
-    // or socket.on("forbidden") { [weak self] (e: Forbidden) in self?.logout() }
-    // socket.connect()
-    // or socket.connect { [weak self] error in if error == .forbidden { self?.logout() } }
-    // Socket(..., onConnect: { error in ... })
-    socket = Socket(url: url, onError: { error in
-      print("[‼️‼️‼️] [Socket]", error)
-    })
-    // socket.onError = { error in }
+    print("\n[RUN]")
     
-    socket.on("event") { (e: Event) in print(e.id) }
-    socket.on("event2") { (e: Event2) in print(e.id) }
+    let lockQueue = DispatchQueue(label: "name.lock.queue")
     
-    socket.push("echo", payload: Event(id: "456", name: "John")) { (result: Result<Event, PushError>) in
-      print("\necho", result)
+    let timeout = DispatchWorkItem {
+      print("current thread is", Thread.current)
     }
     
-    socket.push("error", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-      print("\nerror", result)
-    }
-    
-    socket.push("unhandled", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-      print("\nunhandled", result)
-    }
-    
-    socket.push("crash", payload: ["id"]) { (result: Result<Empty, PushError>) in
-      print("\ncrash", result)
-    }
-    
-//    TODO
-//    retry { [weak self] again in
-//      self?.socket.push("empty", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-//        print("\nempty", result)
-//
-//        switch result {
-//        case .failure(.timeout): again(true)
-//        default: again(false)
-//        }
-//      }
-//    }
-    
-    socket.push("timeout", payload: ["id": 123], timeout: 0.5) { (result: Result<Empty, PushError>) in
-      print("\ntimeout", result)
-    }
-    
-    socket.push("call", payload: CallRequest(id: "123")) { [weak socket] (result: Result<CallResponse, PushError>) in
-      print("\ncall 123", result)
-      
-      if case .success = result {
-        DispatchQueue.main.async {
-          socket?.push("call", payload: CallRequest(id: "234")) { (result: Result<CallResponse, PushError>) in
-            print("\ncall 234", result)
-          }
-        }
-      }
-    }
+    lockQueue.asyncAfter(deadline: .now() + 1, execute: timeout)
+    lockQueue.async { timeout.cancel() }
   }
 }
 
@@ -114,7 +161,23 @@ func retry(attempts: UInt = 2, block: @escaping (@escaping (Bool) -> Void) -> Vo
   guard attempts > 0 else { return }
   
   block { again in
-    if again { retry(attempts: attempts - 1, block: block) }
+    if again {
+      retry(attempts: attempts - 1, block: block)
+    }
+  }
+}
+
+func eh(queue: DispatchQueue) {
+  // why sync runs on the main thread?
+  // and async doesn't, and async doesn't schedule the timer
+  queue.async {
+    print("is main thread", Thread.isMainThread)
+    
+    let timer = Timer(timeInterval: 1, repeats: false) { _ in
+      print("hello from timer", Thread.isMainThread)
+    }
+    
+    RunLoop.current.add(timer, forMode: .common)
   }
 }
 #endif
