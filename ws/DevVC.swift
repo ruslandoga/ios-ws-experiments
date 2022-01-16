@@ -148,15 +148,17 @@ class DevVC: UIViewController {
     
     let lockQueue = DispatchQueue(label: "name.lock.queue")
     
-    let timeout = DispatchWorkItem {
-      print("current thread is", Thread.current)
-    }
+    (1...100).forEach { i in lockQueue.async { print(i, Thread.current) } }
     
-    lockQueue.asyncAfter(deadline: .now() + 1, execute: timeout)
-    lockQueue.async { timeout.cancel() }
-    
-    // TODO why disconnecting twice?
-    socket = Socket(url: URL(string: "ws://localhost:4000/ws")!, token: "some-token", queue: lockQueue)
+//    let timeout = DispatchWorkItem {
+//      print("current thread is", Thread.current)
+//    }
+//
+//    lockQueue.asyncAfter(deadline: .now() + 1, execute: timeout)
+//    lockQueue.async { timeout.cancel() }
+//
+//    // TODO why disconnecting twice?
+//    socket = Socket(url: URL(string: "ws://localhost:4000/ws")!, token: "some-token", queue: lockQueue)
     
 //    socket.push("like", payload: ["id": 123]) { [weak self] (result: Result<LikeResponse, PushError>) in
 //      self?.socket.push("like2", payload: ["id": 234]) { (result: Result<LikeResponse, PushError>) in
@@ -164,11 +166,15 @@ class DevVC: UIViewController {
 //      }
 //    }
     
-    socket.push("timeout", payload: [123], timeout: 0.2) { (result: Result<LikeResponse, PushError>) in
-      // should get decoding error here?
-      print("timeout", result)
-    }
-    
+//    socket.push("echo", payload: ["id": 123]) { (result: Result<[String: Int], PushError>) in
+//      print("echo", result)
+//    }
+//
+//    socket.push("timeout", payload: [123], timeout: 0.2) { (result: Result<LikeResponse, PushError>) in
+//      // should get decoding error here?
+//      print("timeout", result)
+//    }
+//
 //    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
 //      self.socket = nil
 //

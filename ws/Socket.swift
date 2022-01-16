@@ -258,9 +258,9 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
     super.init()
   }
   
-  deinit {
-    disconnect()
-  }
+//  deinit {
+//    disconnect()
+//  }
   
   func connect() {
     queue.async { [weak self] in
