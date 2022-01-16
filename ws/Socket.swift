@@ -20,6 +20,8 @@ enum SocketConnectionState {
 }
 
 final class Socket {
+  fileprivate static let queue = DispatchQueue(label: "fun.copycat.socket")
+  
   private var ref: UInt = 0
   private let decoder = JSONDecoder()
   private let encoder = JSONEncoder()
@@ -48,7 +50,7 @@ final class Socket {
   }
   
   convenience init(url: URL, onError: @escaping (Error) -> ()) {
-    self.init(transport: URLSessionWebSocketTransport(req: .init(url: url)), onError: onError)
+    self.init(url: url, headers: [:], onError: onError)
   }
   
   convenience init(url: URL, token: String, onError: @escaping (Error) -> ()) {
@@ -58,14 +60,19 @@ final class Socket {
   convenience init(url: URL, headers: [String: String], onError: @escaping (Error) -> ()) {
     var req = URLRequest(url: url)
     headers.forEach { header in req.addValue(header.value, forHTTPHeaderField: header.key) }
-    let transport = URLSessionWebSocketTransport(req: req)
+    
+    let delegateQueue = OperationQueue()
+    delegateQueue.underlyingQueue = Socket.queue
+    let session = URLSession(configuration: .default, delegate: nil, delegateQueue: delegateQueue)
+    let transport = URLSessionWebSocketTransport(req: req, session: session)
+    
     self.init(transport: transport, onError: onError)
   }
   
   deinit {
     transport.disconnect()
   }
-
+  
   func on<T: Decodable>(_ event: String, callback: @escaping (T) -> ()) {
     pushInfo.subscriptions[event] = { container in
       let payload = try container.decode(T.self)
@@ -76,49 +83,59 @@ final class Socket {
   func off(_ event: String) {
     pushInfo.subscriptions[event] = nil
   }
-
+  
   func push<E: Encodable, T: Decodable>(_ event: String, payload: E, timeout: TimeInterval? = 5, callback: @escaping (Result<T, PushError>) -> ()) {
-    ref &+= 1
-    let ref = ref
-    
-    var timer: Timer?
-    
-    if let timeout = timeout {
-      // TODO use own queue
-      timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-        guard let self = self else { return }
-        self.pushInfo.replies[ref] = nil
-        self.buffer[ref] = nil
-        callback(.failure(.timeout))
-      }
-    }
-    
-    pushInfo.replies[ref] = { container in
-      let status = try container.decode(ReplyStatus.self)
+    Socket.queue.sync {
+      self.ref &+= 1
+      let ref = ref
       
-      // TODO needs to be some serial queue?
-      timer?.invalidate()
+      var timeoutTimer: Timer?
       
-      switch status {
-      case .ok:
-        let payload = try container.decode(T.self)
-        callback(.success(payload))
+      if let timeout = timeout {
+        let timer = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
+          guard let self = self else { return }
+          
+          Socket.queue.sync {
+            guard self.pushInfo.replies.removeValue(forKey: ref) != nil else {
+              // `reply` has been executed already, no need to timeout
+              return
+            }
+            
+            self.buffer[ref] = nil
+            callback(.failure(.timeout))
+          }
+        }
         
-      case .error:
-        var errorContainer = try container.nestedUnkeyedContainer()
-        let code = try errorContainer.decode(UInt.self)
-        let reason = try errorContainer.decode(String.self)
-        callback(.failure(.reply(code: code, reason: reason)))
+        RunLoop.current.add(timer, forMode: .common)
+        timeoutTimer = timer
       }
-    }
-
-    let request = Request(ref: ref, event: event, payload: payload)
-    
-    do {
-      let data = try encoder.encode(request)
-      sendElseBuffer(data, for: ref)
-    } catch {
-      onError(error)
+      
+      // `reply` closure is already executed on Socket.queue (URLSession.operationQueue.underlyingQueue = Socket.queue)
+      pushInfo.replies[ref] = { container in
+        let status = try container.decode(ReplyStatus.self)
+        timeoutTimer?.invalidate()
+        
+        switch status {
+        case .ok:
+          let payload = try container.decode(T.self)
+          callback(.success(payload))
+          
+        case .error:
+          var errorContainer = try container.nestedUnkeyedContainer()
+          let code = try errorContainer.decode(UInt.self)
+          let reason = try errorContainer.decode(String.self)
+          callback(.failure(.reply(code: code, reason: reason)))
+        }
+      }
+      
+      let request = Request(ref: ref, event: event, payload: payload)
+      
+      do {
+        let data = try encoder.encode(request)
+        sendElseBuffer(data, for: ref)
+      } catch {
+        onError(error)
+      }
     }
   }
   
@@ -191,12 +208,12 @@ fileprivate struct Packet: Decodable {
       let event = try container.decode(String.self)
       guard let subscription = info.subscriptions[event] else { return }
       try subscription(&container)
-
+      
     case 3: // reply
       let ref = try container.decode(UInt.self)
       guard let reply = info.replies.removeValue(forKey: ref) else { return }
       try reply(&container)
-    
+      
     default:
       throw PackerError.invalidLength
     }
@@ -227,43 +244,41 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   var onData: ((Data) -> Void)?
   var onError: ((Error) -> Void)?
   var onClose: (() -> Void)?
-
+  
   private(set) var connectionState: SocketConnectionState = .closed
   private var reconnectDelay = initialReconnectDelay
   private var reconnectTimer: Timer?
   private var pingTimer: Timer?
   
   private let req: URLRequest
+  private let session: URLSession
   private var task: URLSessionWebSocketTask?
   
-  init(req: URLRequest) {
-//    let queue = DispatchQueue(label: "asdf", qos: .userInitiated)
-//    let oq = OperationQueue()
-//    oq.underlyingQueue
-    
+  init(req: URLRequest, session: URLSession) {
     self.req = req
-    // TODO delegateQueue? What should it be?
-    // session = URLSession(configuration: .default, delegate: self, delegateQueue: OperationQueue())
+    self.session = session
     super.init()
   }
   
   deinit {
     disconnect()
   }
-
+  
   func connect() {
-    invalidateTimers()
-    startWebSocketTask()
+    guard task == nil else { return }
+  
+    if let reconnectTimer = reconnectTimer {
+      reconnectTimer.invalidate()
+      reconnectDelay = initialReconnectDelay
+    }
+    
+    reconnect()
   }
   
   private func reconnect() {
-    startWebSocketTask()
-  }
-  
-  private func startWebSocketTask() {
     logger.debug("[websocket] connecting ...")
     
-    task = URLSession.shared.webSocketTask(with: req)
+    task = session.webSocketTask(with: req)
     task?.delegate = self
     task?.priority = 1
     
@@ -275,50 +290,11 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   func disconnect() {
     logger.debug("[websocket] disconnecting ...")
     
-    invalidateTimers()
+    reconnectTimer?.invalidate()
+    pingTimer?.invalidate()
     
     task?.cancel(with: .normalClosure, reason: nil)
     task = nil
-  }
-  
-  private func scheduleReconnect() {
-    logger.debug("[websocket] reconnecting ...")
-    
-    DispatchQueue.main.async {
-      self.reconnectDelay *= 2
-      self.reconnectDelay = min(5, self.reconnectDelay)
-      self.reconnectTimer = Timer.scheduledTimer(withTimeInterval: self.reconnectDelay, repeats: false) { [weak self] _ in
-        self?.reconnect()
-      }
-    }
-  }
-  
-  private func invalidateReconnectTimer() {
-    reconnectTimer?.invalidate()
-    reconnectTimer = nil
-    reconnectDelay = initialReconnectDelay
-  }
-  
-  private func schedulePings() {
-    DispatchQueue.main.async {
-      self.pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-        self?.task?.sendPing { error in
-          if let error = error {
-            self?.onError?(error)
-          }
-        }
-      }
-    }
-  }
-  
-  private func invalidatePingsTimer() {
-    pingTimer?.invalidate()
-    pingTimer = nil
-  }
-  
-  private func invalidateTimers() {
-    invalidateReconnectTimer()
-    invalidatePingsTimer()
   }
   
   func send(_ data: Data, callback: @escaping (Error?) -> Void) {
@@ -337,9 +313,9 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
         }
         
         self.receive()
-
+        
       case let .failure(error):
-         self.onError?(error)
+        self.onError?(error)
       }
     }
   }
@@ -347,16 +323,47 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
 
 extension URLSessionWebSocketTransport: URLSessionWebSocketDelegate {
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-    invalidateReconnectTimer()
-    schedulePings()
+    print(#function)
+    reconnectTimer?.invalidate()
+    reconnectDelay = initialReconnectDelay
+    
+    // schedules pings
+    let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+      print("sending ping")
+      self?.task?.sendPing { error in
+        if let error = error {
+          self?.onError?(error)
+        }
+      }
+    }
+    
+    RunLoop.current.add(timer, forMode: .common)
+    pingTimer = timer
+    
     connectionState = .open
     onOpen?()
   }
-
+  
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    invalidatePingsTimer()
+    print(#function, error)
+    pingTimer?.invalidate()
+    
     connectionState = .closed
     onClose?()
-    scheduleReconnect()
+    
+    self.task = nil
+    
+    reconnectDelay *= 2
+    reconnectDelay = min(5, reconnectDelay)
+    let reconnectIn = reconnectDelay
+
+    // schedules next reconnect
+    let timer = Timer(timeInterval: reconnectIn, repeats: false) { [weak self] _ in
+      print("reconnecting")
+      self?.reconnect()
+    }
+    
+    RunLoop.current.add(timer, forMode: .common)
+    reconnectTimer = timer
   }
 }

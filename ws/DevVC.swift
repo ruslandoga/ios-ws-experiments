@@ -56,7 +56,7 @@ class DevVC: UIViewController {
     // socket.connect()
     // or socket.connect { [weak self] error in if error == .forbidden { self?.logout() } }
     // Socket(..., onConnect: { error in ... })
-    socket = Socket(url: url, token: "some-token", onError: { error in
+    socket = Socket(url: url, onError: { error in
       print("[‼️‼️‼️] [Socket]", error)
     })
     // socket.onError = { error in }
@@ -65,42 +65,45 @@ class DevVC: UIViewController {
     socket.on("event2") { (e: Event2) in print(e.id) }
     
     socket.push("echo", payload: Event(id: "456", name: "John")) { (result: Result<Event, PushError>) in
-      print("echo", result)
+      print("\necho", result)
     }
     
     socket.push("error", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-      print("error", result)
+      print("\nerror", result)
     }
     
     socket.push("unhandled", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-      print("unhandled", result)
+      print("\nunhandled", result)
     }
     
     socket.push("crash", payload: ["id"]) { (result: Result<Empty, PushError>) in
-      print("crash", result)
+      print("\ncrash", result)
     }
     
-    retry { [weak self] again in
-      self?.socket.push("empty", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-        print("empty", result)
-        
-        switch result {
-        case .failure(.timeout): again(true)
-        default: again(false)
-        }
-      }
-    }
+//    TODO
+//    retry { [weak self] again in
+//      self?.socket.push("empty", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
+//        print("\nempty", result)
+//
+//        switch result {
+//        case .failure(.timeout): again(true)
+//        default: again(false)
+//        }
+//      }
+//    }
     
-    socket.push("timeout", payload: ["id": 123]) { (result: Result<Empty, PushError>) in
-      print("timeout", result)
+    socket.push("timeout", payload: ["id": 123], timeout: 0.5) { (result: Result<Empty, PushError>) in
+      print("\ntimeout", result)
     }
     
     socket.push("call", payload: CallRequest(id: "123")) { [weak socket] (result: Result<CallResponse, PushError>) in
-      print("call 123", result)
+      print("\ncall 123", result)
       
       if case .success = result {
-        socket?.push("call", payload: CallRequest(id: "234")) { (result: Result<CallResponse, PushError>) in
-          print("call 234", result)
+        DispatchQueue.main.async {
+          socket?.push("call", payload: CallRequest(id: "234")) { (result: Result<CallResponse, PushError>) in
+            print("\ncall 234", result)
+          }
         }
       }
     }
