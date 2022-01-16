@@ -131,7 +131,7 @@ final class Socket {
         self.transport.send(data) { [weak self] error in
           if error != nil {
             // TODO if timeoutWorkItem has run, don't store data to buffer
-            // can use operation queue for this
+            // maybe can use operation queue for this
             self?.buffer[ref] = data
           }
         }
@@ -289,16 +289,13 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   }
   
   func disconnect() {
-    queue.async { [weak self] in
-      guard let self = self else { return }
-      logger.debug("[websocket] disconnecting ...")
-      
-      self.reconnectItem?.cancel()
-      self.pingItem?.cancel()
-      
-      self.task?.cancel(with: .normalClosure, reason: nil)
-      self.task = nil
-    }
+    logger.debug("[websocket] disconnecting ...")
+    
+    reconnectItem?.cancel()
+    pingItem?.cancel()
+    
+    task?.cancel(with: .normalClosure, reason: nil)
+    task = nil
   }
   
   func send(_ data: Data, callback: @escaping (Error?) -> Void) {

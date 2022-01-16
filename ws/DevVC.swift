@@ -154,6 +154,28 @@ class DevVC: UIViewController {
     
     lockQueue.asyncAfter(deadline: .now() + 1, execute: timeout)
     lockQueue.async { timeout.cancel() }
+    
+    // TODO why disconnecting twice?
+    socket = Socket(url: URL(string: "ws://localhost:4000/ws")!, token: "some-token", queue: lockQueue)
+    
+//    socket.push("like", payload: ["id": 123]) { [weak self] (result: Result<LikeResponse, PushError>) in
+//      self?.socket.push("like2", payload: ["id": 234]) { (result: Result<LikeResponse, PushError>) in
+//
+//      }
+//    }
+    
+    socket.push("timeout", payload: [123], timeout: 0.2) { (result: Result<LikeResponse, PushError>) in
+      // should get decoding error here?
+      print("timeout", result)
+    }
+    
+//    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+//      self.socket = nil
+//
+//      lockQueue.async {
+//        print("disconnected")
+//      }
+//    }
   }
 }
 
@@ -164,20 +186,6 @@ func retry(attempts: UInt = 2, block: @escaping (@escaping (Bool) -> Void) -> Vo
     if again {
       retry(attempts: attempts - 1, block: block)
     }
-  }
-}
-
-func eh(queue: DispatchQueue) {
-  // why sync runs on the main thread?
-  // and async doesn't, and async doesn't schedule the timer
-  queue.async {
-    print("is main thread", Thread.isMainThread)
-    
-    let timer = Timer(timeInterval: 1, repeats: false) { _ in
-      print("hello from timer", Thread.isMainThread)
-    }
-    
-    RunLoop.current.add(timer, forMode: .common)
   }
 }
 #endif
