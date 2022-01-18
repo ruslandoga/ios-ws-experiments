@@ -115,6 +115,7 @@ import os
 
 class DevVC: UIViewController {
   var socket: Socket!
+  let lockQueue = DispatchQueue(label: "name.lock.queue", attributes: .concurrent)
   
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -130,7 +131,7 @@ class DevVC: UIViewController {
     run()
   }
   
-  // I need to learn more about timers, how to schedule them from background using runloop, when it can fail etc
+  // ~~I need to learn more about timers, how to schedule them from background using runloop, when it can fail etc~~ just use dispatch queues .asyncAfter
   // I need to learn more about dispatch queues, self capture etc
   // check that github gist about gcd
   // learn about thread sanitizer https://twitter.com/twannl/status/1192781427978493952?s=20
@@ -143,43 +144,37 @@ class DevVC: UIViewController {
   // https://developer.apple.com/videos/play/wwdc2018/416
   // https://developer.apple.com/videos/play/wwdc2018/401
   // https://developer.apple.com/videos/play/wwdc2017/406
+  // try lock with thread sanitizer
   private func run() {
     print("\n[RUN]")
     
-    let lockQueue = DispatchQueue(label: "name.lock.queue")
+    let started = Date()
+    let lock = NSRecursiveLock()
     
-    (1...100).forEach { i in lockQueue.async { print(i, Thread.current) } }
+    (1...6_000_000).forEach { i in
+      lock.lock()
+      _ = i + 1
+      lock.unlock()
+    }
     
-//    let timeout = DispatchWorkItem {
-//      print("current thread is", Thread.current)
-//    }
-//
-//    lockQueue.asyncAfter(deadline: .now() + 1, execute: timeout)
-//    lockQueue.async { timeout.cancel() }
-//
-//    // TODO why disconnecting twice?
-//    socket = Socket(url: URL(string: "ws://localhost:4000/ws")!, token: "some-token", queue: lockQueue)
+    let ended = Date()
+    print("done in", ended.timeIntervalSince1970 - started.timeIntervalSince1970)
     
-//    socket.push("like", payload: ["id": 123]) { [weak self] (result: Result<LikeResponse, PushError>) in
-//      self?.socket.push("like2", payload: ["id": 234]) { (result: Result<LikeResponse, PushError>) in
+//    lockQueue.async {
+//      print("here 1", Thread.current)
 //
+//      self.lockQueue.async {
+//        self.lockQueue.async {
+//          print("here 5", Thread.current)
+//        }
+//
+//        print("here 3", Thread.current)
 //      }
-//    }
-    
-//    socket.push("echo", payload: ["id": 123]) { (result: Result<[String: Int], PushError>) in
-//      print("echo", result)
-//    }
 //
-//    socket.push("timeout", payload: [123], timeout: 0.2) { (result: Result<LikeResponse, PushError>) in
-//      // should get decoding error here?
-//      print("timeout", result)
-//    }
+//      print("here 2", Thread.current)
 //
-//    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-//      self.socket = nil
-//
-//      lockQueue.async {
-//        print("disconnected")
+//      self.lockQueue.async {
+//        print("here 4", Thread.current)
 //      }
 //    }
   }

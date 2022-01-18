@@ -26,6 +26,7 @@ final class Socket {
   private let pushInfo = PushInfo()
   private let transport: SocketTransport
   private let queue: DispatchQueue
+  private let lock = NSRecursiveLock()
   private var buffer = [UInt: Data]()
   
   var connection: SocketConnectionState {
@@ -71,18 +72,20 @@ final class Socket {
   }
   
   func on<T: Decodable>(_ event: String, callback: @escaping (T) -> ()) {
-    queue.async {
-      self.pushInfo.subscriptions[event] = { container in
-        let payload = try container.decode(T.self)
-        callback(payload)
-      }
+    lock.lock()
+    
+    pushInfo.subscriptions[event] = { container in
+      let payload = try container.decode(T.self)
+      callback(payload)
     }
+    
+    lock.unlock()
   }
   
   func off(_ event: String) {
-    queue.async {
-      self.pushInfo.subscriptions[event] = nil
-    }
+    lock.lock()
+    pushInfo.subscriptions[event] = nil
+    lock.unlock()
   }
   
   func push<E: Encodable, T: Decodable>(_ event: String, payload: E, timeout: TimeInterval? = 5, callback: @escaping (Result<T, PushError>) -> ()) {
@@ -245,10 +248,11 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   private var reconnectDelay = initialReconnectDelay
   private var reconnectItem: DispatchWorkItem?
   private var pingItem: DispatchWorkItem?
-  
+
   private let req: URLRequest
   private let session: URLSession
   private let queue: DispatchQueue
+  // private let lock = NSRecursiveLock()
   private var task: URLSessionWebSocketTask?
   
   init(req: URLRequest, session: URLSession, queue: DispatchQueue) {
