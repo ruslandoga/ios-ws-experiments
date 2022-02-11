@@ -1,5 +1,9 @@
 import Foundation
 
+// TODO maybe sync everything to main thread?
+// https://inessential.com/2021/03/21/benefits_of_netnewswires_threading_model
+// or not: https://kean.blog/post/concurrency
+
 enum PushError: Error {
   case timeout
   case reply(code: UInt, reason: String)
@@ -33,6 +37,16 @@ final class Socket {
     transport.connectionState
   }
   
+  var onAuth: ((URLAuthenticationChallenge) -> Void)? {
+    set { transport.onAuth = newValue }
+    get { transport.onAuth }
+  }
+  
+  var onError: ((Error) -> Void)? {
+    set { transport.onError = newValue }
+    get { transport.onError }
+  }
+  
   init(transport: SocketTransport, queue: DispatchQueue) {
     self.queue = queue
     
@@ -41,10 +55,8 @@ final class Socket {
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     
     self.transport = transport
-    // callbacks run on queue (URLSession.delegateQueue.underlyingQueue = queue)
     transport.onOpen = { [weak self] in self?.emptyBuffer() }
     transport.onData = { [weak self] data in self?.receive(data) }
-    transport.connect()
   }
   
   convenience init(url: URL, queue: DispatchQueue) {
@@ -58,13 +70,12 @@ final class Socket {
   convenience init(url: URL, headers: [String: String], queue: DispatchQueue) {
     var req = URLRequest(url: url)
     headers.forEach { header in req.addValue(header.value, forHTTPHeaderField: header.key) }
-    
-    let delegateQueue = OperationQueue()
-    delegateQueue.underlyingQueue = queue
-    let session = URLSession(configuration: .default, delegate: nil, delegateQueue: delegateQueue)
-    let transport = URLSessionWebSocketTransport(req: req, session: session, queue: queue)
-    
+    let transport = URLSessionWebSocketTransport(req: req, queue: queue)
     self.init(transport: transport, queue: queue)
+  }
+  
+  func connect() {
+    transport.connect()
   }
   
   deinit {
@@ -224,6 +235,7 @@ fileprivate enum ReplyStatus: String, Codable {
 }
 
 protocol SocketTransport: AnyObject {
+  var onAuth: ((URLAuthenticationChallenge) -> Void)? { get set }
   var onOpen: (() -> Void)? { get set }
   var onData: ((Data) -> Void)? { get set }
   var onError: ((Error) -> Void)? { get set }
@@ -239,6 +251,7 @@ protocol SocketTransport: AnyObject {
 fileprivate let initialReconnectDelay: TimeInterval = 0.05
 
 final class URLSessionWebSocketTransport: NSObject, SocketTransport {
+  var onAuth: ((URLAuthenticationChallenge) -> Void)?
   var onOpen: (() -> Void)?
   var onData: ((Data) -> Void)?
   var onError: ((Error) -> Void)?
@@ -250,16 +263,21 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   private var pingItem: DispatchWorkItem?
 
   private let req: URLRequest
-  private let session: URLSession
+  
+  // TODO weak?
+  private var session: URLSession?
   private let queue: DispatchQueue
   // private let lock = NSRecursiveLock()
   private var task: URLSessionWebSocketTask?
   
-  init(req: URLRequest, session: URLSession, queue: DispatchQueue) {
-    self.req = req
-    self.session = session
+  init(req: URLRequest, queue: DispatchQueue) {
     self.queue = queue
+    self.req = req
     super.init()
+    
+    let delegateQueue = OperationQueue()
+    delegateQueue.underlyingQueue = queue
+    self.session = URLSession(configuration: .default, delegate: self, delegateQueue: delegateQueue)
   }
   
 //  deinit {
@@ -281,10 +299,9 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   }
   
   private func reconnect() {
-    logger.debug("[websocket] connecting ...")
+    print("[websocket] connecting ...")
     
-    task = session.webSocketTask(with: req)
-    task?.delegate = self
+    task = session?.webSocketTask(with: req)
     task?.priority = 1
     
     receive()
@@ -293,13 +310,18 @@ final class URLSessionWebSocketTransport: NSObject, SocketTransport {
   }
   
   func disconnect() {
-    logger.debug("[websocket] disconnecting ...")
+    print("[websocket] disconnecting ...")
     
     reconnectItem?.cancel()
     pingItem?.cancel()
     
     task?.cancel(with: .normalClosure, reason: nil)
     task = nil
+    // The session object keeps a strong reference to the delegate until
+    // your app exits or explicitly invalidates the session. If you don’t
+    // invalidate the session, your app leaks memory until the app terminates.
+    session?.invalidateAndCancel()
+    session = nil
   }
   
   func send(_ data: Data, callback: @escaping (Error?) -> Void) {
@@ -372,5 +394,15 @@ extension URLSessionWebSocketTransport: URLSessionWebSocketDelegate {
     
     queue.asyncAfter(deadline: .now() + reconnectDelay, execute: item)
     reconnectItem = item
+  }
+  
+  func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodHTTPBasic else {
+      completionHandler(.performDefaultHandling, nil)
+      return
+    }
+    
+    completionHandler(.cancelAuthenticationChallenge, nil)
+    onAuth?(challenge)
   }
 }
